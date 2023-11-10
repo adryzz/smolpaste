@@ -130,7 +130,7 @@ async fn new_paste(
         Err(sqlx::Error::RowNotFound) => return Err(StatusCode::UNAUTHORIZED),
         _ => return Err(StatusCode::INTERNAL_SERVER_ERROR)
     };
-
+    
     let id = uuid::Uuid::new_v4();
     let field = match multipart.next_field().await {
         Ok(Some(f)) => f,
@@ -152,6 +152,21 @@ async fn new_paste(
         filename,
         timestamp: utc.timestamp(),
     };
+
+    sqlx::query("INSERT INTO pastes (
+        id,
+        size,
+        filename,
+        timestamp
+    )VALUES (
+        $1, $2, $3, $4
+    )")
+    .bind(info.id.to_string())
+    .bind(info.size)
+    .bind(info.filename)
+    .bind(info.timestamp)
+    .fetch_one(&state.db).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     
     return Ok(format!("{}/paste/{}", state.base_url, id))
 }
