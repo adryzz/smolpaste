@@ -1,9 +1,9 @@
-use std::{sync::Arc, time::Duration, path::Path};
+use std::{sync::Arc, time::Duration, path};
 
 use axum::{
-    extract::{Multipart, State, Query},
+    extract::{Multipart, State, Query, Path},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, delete},
     Router, body::Bytes,
 };
 use chrono::prelude::*;
@@ -54,6 +54,7 @@ async fn run() -> anyhow::Result<()> {
     let addr = std::env::var("SMOLPASTE_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".to_string());
     let app = Router::new()
         .route("/new", post(new_paste))
+        .route("/delete", delete(delete_paste))
         .nest_service("/paste",ServeDir::new(PASTES_DIRECTORY))
         .with_state(state);
 
@@ -104,6 +105,11 @@ pub struct PasteInfo {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+pub struct FileNameWrapper {
+    filename: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TokenInfo {
     value: Uuid,
     created_at: i64
@@ -113,6 +119,13 @@ pub struct TokenInfo {
 pub struct TokenParam {
     token: String
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IdTokenParam {
+    token: String,
+    id: String
+}
+
 
 #[axum::debug_handler]
 async fn new_paste(
@@ -139,7 +152,7 @@ async fn new_paste(
 
     let upload_name = match field.file_name() {
         None => return Err(StatusCode::BAD_REQUEST),
-        Some(n) => Path::new(n)
+        Some(n) => path::Path::new(n)
     };
 
     let filename = match upload_name.extension() {
@@ -179,6 +192,39 @@ async fn new_paste(
 
     tracing::info!("{}/paste/{}", state.base_url, info.filename);
     return Ok(format!("{}/paste/{}", state.base_url, info.filename))
+}
+
+#[axum::debug_handler]
+async fn delete_paste(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<IdTokenParam>,
+) -> Result<StatusCode, StatusCode> {
+    let res = sqlx::query_scalar::<_, i32>("SELECT COUNT(*) as count FROM tokens WHERE value = $1")
+    .bind(query.token)
+    .fetch_one(&state.db).await;
+
+    match res {
+        Ok(1) => {},
+        Ok(0) => return Err(StatusCode::UNAUTHORIZED),
+        Err(sqlx::Error::RowNotFound) => return Err(StatusCode::UNAUTHORIZED),
+        _ => return Err(StatusCode::INTERNAL_SERVER_ERROR)
+    };
+
+    let paste = match sqlx::query_as::<_, FileNameWrapper>("DELETE FROM pastes WHERE id = $1 RETURNING filename")
+    .bind(&query.id)
+    .fetch_one(&state.db)
+    .await {
+        Ok(f) => f,
+        Err(sqlx::Error::RowNotFound) => return Err(StatusCode::NOT_FOUND),
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR)
+    };
+
+    tracing::info!("Deleting paste {}", &paste.filename);
+
+    tokio::fs::remove_file(format!("{}/{}", PASTES_DIRECTORY, paste.filename))
+    .await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(StatusCode::OK)
 }
 
 async fn stream_to_file<S, E>(path: &str, stream: S) -> anyhow::Result<u32>
