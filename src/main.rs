@@ -173,12 +173,12 @@ async fn new_paste(
     )")
     .bind(info.id.to_string())
     .bind(info.size)
-    .bind(info.filename)
+    .bind(&info.filename)
     .bind(info.timestamp)
     .execute(&state.db).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    tracing::info!("{}/paste/{}", state.base_url, id);
-    return Ok(format!("{}/paste/{}", state.base_url, id))
+    tracing::info!("{}/paste/{}", state.base_url, info.filename);
+    return Ok(format!("{}/paste/{}", state.base_url, info.filename))
 }
 
 async fn stream_to_file<S, E>(path: &str, stream: S) -> anyhow::Result<u32>
