@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration, path::Path};
 
 use axum::{
     extract::{Multipart, State, Query},
@@ -137,9 +137,19 @@ async fn new_paste(
         _ => return Err(StatusCode::BAD_REQUEST)
     };
 
-    let filename = id.to_string();
+    let upload_name = match field.file_name() {
+        None => return Err(StatusCode::BAD_REQUEST),
+        Some(n) => Path::new(n)
+    };
 
-    // TODO: save file, register it to the db and stuff
+    let filename = match upload_name.extension() {
+        Some(e) => match e.to_str() {
+            Some(e) => format!("{}.{}", id, e),
+            None => return Err(StatusCode::BAD_REQUEST)
+        },
+        None => format!("{}", id)
+    };
+
     let written = stream_to_file(&filename, field).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     tracing::info!("Created a {} byte file.", written);
@@ -165,9 +175,9 @@ async fn new_paste(
     .bind(info.size)
     .bind(info.filename)
     .bind(info.timestamp)
-    .fetch_one(&state.db).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .execute(&state.db).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    
+    tracing::info!("{}/paste/{}", state.base_url, id);
     return Ok(format!("{}/paste/{}", state.base_url, id))
 }
 
